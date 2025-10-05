@@ -1,0 +1,12 @@
+# Ignore compiled binaries
+a.out
+file_crypto
+
+# Ignore test files
+*.txt
+*.enc
+*.dec
+
+# Ignore object files
+*.o
+

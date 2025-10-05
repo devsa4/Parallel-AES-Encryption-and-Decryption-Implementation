@@ -1,26 +1,40 @@
 #include <iostream>
- #include <string>
- 
- int main() {
- std::string filepath;
- std::string key;
- int choice;
- 
- // Ask for file path
- std::cout << "Enter the path of the file: ";
- std::getline(std::cin, filepath);
- 
- // Ask for secret key
- std::cout << "Enter the secret key: ";
- std::getline(std::cin, key);
- 
- // Ask for operation
- std::cout << "Choose operation:\n1. Encrypt\n2. Decrypt\nEnter choice (1 or 2): ";
- std::cin >> choice;
- 
- // Confirm input
- std::cout << "\nFile: " << filepath << "\nKey: " << key << "\nOperation: " << (choice == 1 ? "Encrypt" : "Decrypt") << "\n";
- 
- // You can now pass these values to your encryption/decryption functions
- return 0;
- }
+#include <string>
+#include "encryptor.h"
+#include "decryptor.h"
+
+int main() {
+    std::string filepath;
+    std::string passphrase;
+    int choice;
+
+    std::cout << "Enter path of file: ";
+    std::getline(std::cin, filepath);
+
+    std::cout << "Enter passphrase: ";
+    std::getline(std::cin, passphrase);
+
+    std::cout << "Choose operation:\n1. Encrypt\n2. Decrypt\n> ";
+    std::cin >> choice;
+
+    if (choice == 1) {
+        std::string outpath = filepath + ".enc";
+        if (encrypt_file(filepath, outpath, passphrase)) {
+            std::cout << "File encrypted successfully -> " << outpath << std::endl;
+        } else {
+            std::cout << "Encryption failed!" << std::endl;
+        }
+    } else if (choice == 2) {
+        std::string outpath = filepath + ".dec";
+        if (decrypt_file(filepath, outpath, passphrase)) {
+            std::cout << "File decrypted successfully -> " << outpath << std::endl;
+        } else {
+            std::cout << "Decryption failed!" << std::endl;
+        }
+    } else {
+        std::cout << "Invalid choice!" << std::endl;
+    }
+
+    return 0;
+}
+
