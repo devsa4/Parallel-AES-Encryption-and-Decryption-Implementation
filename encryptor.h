@@ -3,7 +3,10 @@
 
 #include <string>
 
-bool encrypt_file(const std::string &in_path, const std::string &out_path, const std::string &passphrase);
+bool encrypt_file_multithreaded(const std::string &in_path,
+                                const std::string &out_path,
+                                const std::string &passphrase,
+                                int num_threads = 4);
 
 #endif
 

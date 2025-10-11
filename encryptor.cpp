@@ -2,14 +2,22 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <pthread.h>
 #include <fstream>
 #include <vector>
 #include <iostream>
 #include <cstring>
 
-static const int AES_KEY_LEN = 16;   // 128 bits
+static const int AES_KEY_LEN = 16;  
 static const int AES_BLOCK_SIZE = 16;
-static const size_t BUFFER_SIZE = 4096;
+
+struct ThreadData {
+    std::vector<unsigned char> input;
+    std::vector<unsigned char> output;
+    unsigned char key[AES_KEY_LEN];
+    unsigned char iv[AES_BLOCK_SIZE];
+    bool success = false;
+};
 
 void derive_key(const std::string &pass, unsigned char key[AES_KEY_LEN]) {
     unsigned char hash[SHA256_DIGEST_LENGTH];
@@ -17,59 +25,77 @@ void derive_key(const std::string &pass, unsigned char key[AES_KEY_LEN]) {
     memcpy(key, hash, AES_KEY_LEN);
 }
 
-bool encrypt_file(const std::string &in_path, const std::string &out_path, const std::string &passphrase) {
-    std::ifstream infile(in_path, std::ios::binary);
-    if (!infile) { std::cerr << "Cannot open input file\n"; return false; }
+void* encrypt_chunk(void* arg) {
+    ThreadData* td = (ThreadData*)arg;
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) return nullptr;
 
-    std::ofstream outfile(out_path, std::ios::binary);
-    if (!outfile) { std::cerr << "Cannot open output file\n"; return false; }
+    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), nullptr, td->key, td->iv)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+
+    td->output.resize(td->input.size() + AES_BLOCK_SIZE);
+    int out1 = 0, out2 = 0;
+    if (1 != EVP_EncryptUpdate(ctx, td->output.data(), &out1,
+                               td->input.data(), (int)td->input.size())) {
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+    if (1 != EVP_EncryptFinal_ex(ctx, td->output.data() + out1, &out2)) {
+        EVP_CIPHER_CTX_free(ctx);
+        return nullptr;
+    }
+    td->output.resize(out1 + out2);
+    td->success = true;
+    EVP_CIPHER_CTX_free(ctx);
+    return nullptr;
+}
+
+bool encrypt_file_multithreaded(const std::string &in_path,
+                                const std::string &out_path,
+                                const std::string &passphrase,
+                                int num_threads) {
+    std::ifstream in(in_path, std::ios::binary | std::ios::ate);
+    if (!in) { std::cerr << "Cannot open input\n"; return false; }
+    size_t filesize = in.tellg();
+    in.seekg(0);
+
+    std::ofstream out(out_path, std::ios::binary);
+    if (!out) { std::cerr << "Cannot open output\n"; return false; }
 
     unsigned char key[AES_KEY_LEN];
     derive_key(passphrase, key);
 
-    unsigned char iv[AES_BLOCK_SIZE];
-    if (RAND_bytes(iv, sizeof(iv)) != 1) {
-        std::cerr << "IV generation failed\n";
-        return false;
+    size_t chunk_size = (filesize + num_threads - 1) / num_threads;
+    std::vector<ThreadData> td(num_threads);
+    std::vector<pthread_t> tids(num_threads);
+
+
+    for (int i = 0; i < num_threads; ++i) {
+        size_t start = i * chunk_size;
+        if (start >= filesize) { num_threads = i; break; }
+        size_t this_chunk = std::min(chunk_size, filesize - start);
+        td[i].input.resize(this_chunk);
+        in.read((char*)td[i].input.data(), this_chunk);
+
+        memcpy(td[i].key, key, AES_KEY_LEN);
+        RAND_bytes(td[i].iv, AES_BLOCK_SIZE);
+        pthread_create(&tids[i], nullptr, encrypt_chunk, &td[i]);
     }
-
-    outfile.write((char*)iv, sizeof(iv));
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return false;
-
-    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_128_cbc(), nullptr, key, iv)) {
-        std::cerr << "EncryptInit failed\n";
-        EVP_CIPHER_CTX_free(ctx);
-        return false;
-    }
-
-    std::vector<unsigned char> inbuf(BUFFER_SIZE);
-    std::vector<unsigned char> outbuf(BUFFER_SIZE + AES_BLOCK_SIZE);
-    int outlen;
-
-    while (infile.good()) {
-        infile.read((char*)inbuf.data(), inbuf.size());
-        std::streamsize read_bytes = infile.gcount();
-        if (read_bytes > 0) {
-            if (1 != EVP_EncryptUpdate(ctx, outbuf.data(), &outlen,
-                                       inbuf.data(), (int)read_bytes)) {
-                std::cerr << "EncryptUpdate failed\n";
-                EVP_CIPHER_CTX_free(ctx);
-                return false;
-            }
-            outfile.write((char*)outbuf.data(), outlen);
+    
+    for (int i = 0; i < num_threads; ++i) {
+        pthread_join(tids[i], nullptr);
+        if (!td[i].success) {
+            std::cerr << "Chunk " << i << " failed\n";
+            return false;
         }
+        uint64_t sz = td[i].output.size();
+        out.write((char*)td[i].iv, AES_BLOCK_SIZE);
+        out.write((char*)&sz, sizeof(sz));
+        out.write((char*)td[i].output.data(), sz);
     }
 
-    if (1 != EVP_EncryptFinal_ex(ctx, outbuf.data(), &outlen)) {
-        std::cerr << "EncryptFinal failed\n";
-        EVP_CIPHER_CTX_free(ctx);
-        return false;
-    }
-    outfile.write((char*)outbuf.data(), outlen);
-
-    EVP_CIPHER_CTX_free(ctx);
     return true;
 }
 
