@@ -1,45 +1,75 @@
 #include <iostream>
 #include <string>
+#include <vector>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "encryptor.h"
 #include "decryptor.h"
 
 int main() {
-    std::string filepath;
-    std::string passphrase;
     int choice;
-    int num_threads = 4; // default thread count
+    int num_threads = 4;
+    std::string passphrase;
+    std::vector<std::string> filepaths;
 
-    std::cout << "Enter path of file: ";
-    std::getline(std::cin, filepath);
+    std::cout << "Choose operation:\n1. Encrypt\n2. Decrypt\n> ";
+    std::cin >> choice;
+    std::cin.ignore(); // clear newline
 
     std::cout << "Enter passphrase: ";
     std::getline(std::cin, passphrase);
 
-    std::cout << "Choose operation:\n1. Encrypt\n2. Decrypt\n> ";
-    std::cin >> choice;
-
     std::cout << "Enter number of threads (default 4): ";
     std::cin >> num_threads;
+    std::cin.ignore();
     if (num_threads <= 0) num_threads = 4;
 
-    if (choice == 1) {
-        std::string outpath = filepath + ".enc";
-        if (encrypt_file_multithreaded(filepath, outpath, passphrase, num_threads)) {
-            std::cout << "File encrypted successfully -> " << outpath << std::endl;
-        } else {
-            std::cout << "Encryption failed!" << std::endl;
+    std::cout << "Enter file paths (comma-separated): ";
+    std::string input;
+    std::getline(std::cin, input);
+
+    // Split input into filepaths
+    size_t pos = 0;
+    while ((pos = input.find(',')) != std::string::npos) {
+        filepaths.push_back(input.substr(0, pos));
+        input.erase(0, pos + 1);
+    }
+    if (!input.empty()) filepaths.push_back(input);
+
+    for (const auto& filepath : filepaths) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            std::string outpath;
+            bool success = false;
+
+            if (choice == 1) {
+                outpath = filepath + ".enc";
+                success = encrypt_file_multithreaded(filepath, outpath, passphrase, num_threads);
+            } else if (choice == 2) {
+                outpath = filepath + ".dec";
+                success = decrypt_file_multithreaded(filepath, outpath, passphrase, num_threads);
+            } else {
+                std::cerr << "Invalid choice!" << std::endl;
+                exit(1);
+            }
+
+            if (success) {
+                std::cout << "Success -> " << outpath << std::endl;
+            } else {
+                std::cerr << "Failed -> " << filepath << std::endl;
+            }
+            exit(success ? 0 : 1);
+        } else if (pid < 0) {
+            std::cerr << "Fork failed for " << filepath << std::endl;
         }
-    } else if (choice == 2) {
-        std::string outpath = filepath + ".dec";
-        if (decrypt_file_multithreaded(filepath, outpath, passphrase, num_threads)) {
-            std::cout << "File decrypted successfully -> " << outpath << std::endl;
-        } else {
-            std::cout << "Decryption failed!" << std::endl;
-        }
-    } else {
-        std::cout << "Invalid choice!" << std::endl;
     }
 
+    // Wait for all child processes
+    for (size_t i = 0; i < filepaths.size(); ++i) {
+        int status;
+        wait(&status);
+    }
+
+    std::cout << "All operations completed." << std::endl;
     return 0;
 }
-
